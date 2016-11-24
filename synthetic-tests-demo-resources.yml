@@ -1,0 +1,403 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS CloudFormation template which contains the resources for synthetic tests demo."
+Parameters:
+  DemoResourcesS3BucketName:
+    Description: Amazon S3 bucket where demo resources zip file was uploaded to.
+    Type: String
+  DemoResourcesS3ObjectKey:
+    Description: Amazon S3 object key with which demo resources zip file was uploaded to.
+    Type: String
+  CodeDeploySampleAppS3BucketName:
+    Description: Amazon S3 bucket which contains AWS CodeDeploy sample app.
+    Type: String
+  CodeDeploySampleAppS3ObjectKey:
+    Description: Amazon S3 object key of AWS CodeDeploy sample app.
+    Type: String
+  KeyPairName:
+    Description: The name of an existing Amazon EC2 key pair to enable SSH or RDP access.
+      to the instances.
+    Type: String
+    MinLength: '1'
+    MaxLength: '255'
+    AllowedPattern: "[\\x20-\\x7E]*"
+    ConstraintDescription: Can contain only ASCII characters.
+
+Mappings:
+  RegionOS2AMI:
+    us-east-1:
+      Linux: ami-7c807d14
+    us-west-2:
+      Linux: ami-1b3b462b
+    eu-west-1:
+      Linux: ami-672ce210
+    ap-southeast-2:
+      Linux: ami-6bf99c51
+    ap-southeast-1:
+      Linux: ami-c9b572aa
+    us-west-1:
+      Linux: ami-d5ea86b5
+    eu-central-1:
+      Linux: ami-ae221fb3
+    ap-northeast-1:
+      Linux: ami-25dd9324
+    sa-east-1:
+      Linux: ami-d412aab8
+  Constants:
+    Pipeline:
+      Name: SyntheticTestsDemoPipeline
+      SourceStageName: Source
+      DeployStageName: ProductionDeploy
+    CloudWatchMetrics:
+      Namespace: SyntheticTestMetrics
+      Name: Failure
+
+Resources:
+  # The instance will use this role to access S3
+  EC2Role:
+    Type: "AWS::IAM::Role"
+    Properties:
+        AssumeRolePolicyDocument:
+            Statement:
+                - Sid: ""
+                  Effect: "Allow"
+                  Principal:
+                      Service:
+                          - "ec2.amazonaws.com"
+                  Action: "sts:AssumeRole"
+        Policies:
+            - PolicyName: "s3"
+              PolicyDocument:
+                  Version: "2012-10-17"
+                  Statement:
+                      - Effect: "Allow"
+                        Action:
+                            - "s3:GetObject"
+                        Resource: "*"
+
+  EC2InstanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+        Roles:
+          - !Ref EC2Role
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Enable HTTP access via port 80 and SSH access."
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: "80"
+          ToPort: "80"
+          CidrIp: "0.0.0.0/0"
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: "0.0.0.0/0"
+
+  LaunchConfiguration:
+    Type: "AWS::AutoScaling::LaunchConfiguration"
+    Properties:
+        IamInstanceProfile: !Ref EC2InstanceProfile
+        ImageId: { "Fn::FindInMap": ["RegionOS2AMI", { "Ref" : "AWS::Region" } , "Linux"]}
+        InstanceType: t1.micro
+        KeyName:
+            !Ref KeyPairName
+        SecurityGroups:
+          - !Ref SecurityGroup
+        UserData:
+            "Fn::Base64":
+                "Fn::Join":
+                    - ""
+                    - [
+                        "#!/bin/bash -xe\n",
+
+                        "yum -y update\n",
+                        "yum install -y ruby\n",
+                        "yum install -y aws-cli\n",
+                        "cd /home/ec2-user/\n",
+                        "aws s3 cp s3://aws-codedeploy-", { "Ref" : "AWS::Region" }, "/latest/install . --region ", { "Ref" : "AWS::Region" }, "\n",
+                        "chmod +x ./install\n",
+                        "./install auto\n"
+                      ]
+
+  ElasticLoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      AvailabilityZones: { "Fn::GetAZs" : { "Ref" : "AWS::Region" } }
+      Listeners:
+        - LoadBalancerPort: '80'
+          InstancePort: '80'
+          Protocol: HTTP
+      SecurityGroups:
+        - !GetAtt [SecurityGroup, GroupId]
+
+  AutoscalingGroup:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+      LoadBalancerNames :
+        - !Ref ElasticLoadBalancer
+      AvailabilityZones: { "Fn::GetAZs" : { "Ref" : "AWS::Region" } }
+      DesiredCapacity: 1
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      MinSize: "1"
+      MaxSize: "3"
+
+  CodeDeployTrustRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+        AssumeRolePolicyDocument:
+            Statement:
+                - Sid: ""
+                  Effect: "Allow"
+                  Principal:
+                      Service:
+                          - "codedeploy.amazonaws.com"
+                  Action: "sts:AssumeRole"
+        Policies:
+            - PolicyName: "ec2"
+              PolicyDocument:
+                  Version: "2012-10-17"
+                  Statement:
+                      - Effect: "Allow"
+                        Action:
+                            - "ec2:Describe*"
+                            - "autoscaling:CompleteLifecycleAction"
+                            - "autoscaling:DeleteLifecycleHook"
+                            - "autoscaling:DescribeAutoscalingGroups"
+                            - "autoscaling:DescribeLifecycleHooks"
+                            - "autoscaling:PutInstanceInService"
+                            - "autoscaling:PutInstanceInStandby"
+                            - "autoscaling:PutLifecycleHook"
+                            - "autoscaling:RecordLifecycleActionHeartbeat"
+                        Resource: "*"
+
+  CodeDeployApplication:
+    Type: "AWS::CodeDeploy::Application"
+
+  CodeDeployDeploymentGroup:
+    Type: "AWS::CodeDeploy::DeploymentGroup"
+    Properties:
+        ApplicationName: !Ref CodeDeployApplication
+        ServiceRoleArn: !GetAtt [CodeDeployTrustRole, Arn]
+        AutoScalingGroups:
+            - !Ref AutoscalingGroup
+
+  ArtifactStoreBucket:
+    Type: AWS::S3::Bucket
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      ArtifactStore:
+        Location: !Ref ArtifactStoreBucket
+        Type: S3
+      Name: !FindInMap [ Constants, Pipeline, Name]
+      RoleArn: !GetAtt [PipelineRole, Arn]
+      Stages:
+        - Name: !FindInMap [ Constants, Pipeline, SourceStageName]
+          Actions:
+            - Name: S3Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: S3
+                Version: '1'
+              Configuration:
+                S3Bucket: !Ref CodeDeploySampleAppS3BucketName
+                S3ObjectKey: !Ref CodeDeploySampleAppS3ObjectKey
+              OutputArtifacts:
+                - Name: CodeDeployArtifacts
+              RunOrder: '1'
+        - Name: !FindInMap [ Constants, Pipeline, DeployStageName]
+          Actions:
+            - Name: CodeDeployApp
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: '1'
+              InputArtifacts:
+                - Name: CodeDeployArtifacts
+              Configuration:
+                  ApplicationName: !Ref CodeDeployApplication
+                  DeploymentGroupName: !Ref CodeDeployDeploymentGroup
+              RunOrder: '1'
+
+  PipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codepipeline.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - "s3:GetObject"
+                  - "s3:GetObjectVersion"
+                Resource:
+                  - "Fn::Join": ["", ["arn:aws:s3:::", {"Ref": "CodeDeploySampleAppS3BucketName"}, "/*"]]
+                Effect: Allow
+              - Action:
+                  - "s3:GetBucketVersioning"
+                Resource:
+                  - "Fn::Join": ["", ["arn:aws:s3:::", {"Ref": "CodeDeploySampleAppS3BucketName"}]]
+                Effect: Allow
+              - Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                Resource:
+                   - "Fn::Join": ["", ["arn:aws:s3:::", {"Ref": "ArtifactStoreBucket"}, "/*" ]]
+                Effect: Allow
+              - Effect: "Allow"
+                Action:
+                    - "s3:ListBucket"
+                Resource:
+                    - "Fn::Join": ["", ["arn:aws:s3:::", {"Ref": "ArtifactStoreBucket"}]]
+              - Effect: Allow
+                Action:
+                  - "codedeploy:CreateDeployment"
+                  - "codedeploy:GetApplicationRevision"
+                  - "codedeploy:GetDeployment"
+                  - "codedeploy:GetDeploymentConfig"
+                  - "codedeploy:RegisterApplicationRevision"
+                Resource: "*"
+
+  DisableStageTransitionFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: CodePipelineAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "codepipeline:DisableStageTransition"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
+
+  DisableStageTransitionLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: "disable_transition.handler"
+      Role: !GetAtt [DisableStageTransitionFunctionExecutionRole, Arn]
+      Code:
+        S3Bucket: !Ref DemoResourcesS3BucketName
+        S3Key: !Ref DemoResourcesS3ObjectKey
+      Runtime: nodejs4.3
+      Timeout: 25
+      Environment:
+        Variables:
+          PIPELINE_NAME: !FindInMap [ Constants, Pipeline, Name]
+          STAGE_NAME: !FindInMap [ Constants, Pipeline, DeployStageName]
+
+  DisableStageTransitionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt [DisableStageTransitionLambdaFunction, Arn]
+      Action: "lambda:InvokeFunction"
+      Principal: "sns.amazonaws.com"
+      SourceArn: !Ref SyntheticTestFailureSNSNotification
+
+  SyntheticTestFailureSNSNotification:
+      Type: AWS::SNS::Topic
+      Properties:
+        Subscription:
+          - Protocol: "lambda"
+            Endpoint: !GetAtt [DisableStageTransitionLambdaFunction, Arn]
+
+  SyntheticTestFailureCloudWatchAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        ActionsEnabled: true
+        AlarmActions:
+          - !Ref SyntheticTestFailureSNSNotification
+        ComparisonOperator: GreaterThanOrEqualToThreshold
+        # Set to a higher value to allow instances and load balancer to become healthy
+        EvaluationPeriods: 10
+        Namespace: !FindInMap [ Constants, CloudWatchMetrics, Namespace]
+        MetricName: !FindInMap [ Constants, CloudWatchMetrics, Name]
+        Period: 60
+        Statistic: Sum
+        Threshold: 1
+
+  SyntheticTestFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [lambda.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: CloudWatchAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:PutLogEvents"
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: Allow
+                Action:
+                  - "cloudwatch:PutMetricData"
+                Resource: '*'
+
+  SyntheticTestRunnerLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: "synthetic-test-runner.handler"
+      Role: !GetAtt [SyntheticTestFunctionExecutionRole, Arn]
+      Code:
+        S3Bucket: !Ref DemoResourcesS3BucketName
+        S3Key: !Ref DemoResourcesS3ObjectKey
+      Runtime: "nodejs4.3"
+      Timeout: "25"
+      Environment:
+        Variables:
+          WEBSITE_URL: !GetAtt [ElasticLoadBalancer, DNSName]
+          METRIC_NAMESPACE: !FindInMap [ Constants, CloudWatchMetrics, Namespace]
+          METRIC_NAME: !FindInMap [ Constants, CloudWatchMetrics, Name]
+
+  SyntheticTestRunnerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt [SyntheticTestRunnerLambdaFunction, Arn]
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt [SyntheticTestScheduleTrigger, Arn]
+
+  SyntheticTestScheduleTrigger:
+      Type: AWS::Events::Rule
+      Properties:
+        ScheduleExpression: rate(1 minute)
+        State: ENABLED
+        Targets:
+          - Arn: !GetAtt [SyntheticTestRunnerLambdaFunction, Arn]
+            Id: "InvokeSyntheticTestRunner"
