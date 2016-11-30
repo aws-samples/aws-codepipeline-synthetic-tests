@@ -5,7 +5,7 @@ for building synthetic tests and use it to disable transitions in AWS CodePipeli
 
 ## Prerequisites
 
-1. Create an AWS CodeCommit repository with any name of your preference using AWS console or CLI. This document assumes that the name you chose is 'aws-codepipeline-synthetic-tests'.
+1. Create an AWS CodeCommit repository with any name of your preference using AWS console or CLI. This document assumes that the name you chose is `aws-codepipeline-synthetic-tests`.
 2. Clone the content of this repository to AWS CodeCommit repository created in the above step. See this [article](http://docs.aws.amazon.com/codecommit/latest/userguide/how-to-migrate-repository.html) for details on cloning a GitHub repository to AWS CodeCommit.
 3. Download AWS CodeDeploy sample application for Linux using this [link](https://s3.amazonaws.com/aws-codedeploy-us-east-1/samples/latest/SampleApp_Linux.zip).
 4. Upload this application in a version enabled Amazon S3 bucket you own. Note down both the bucket name and object key. You will need in later steps.
