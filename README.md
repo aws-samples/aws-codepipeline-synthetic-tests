@@ -21,6 +21,7 @@ Run following steps in the local workspace where GitHub repository was cloned:
     * `KeyPairName` : Amazon EC2 key pair name
     * `YourIP` : IP address to connect to SSH from. Check http://checkip.amazonaws.com/ to find yours.
 3. Create a new CloudFormation stack using AWS CloudFormation template `setup-synthetic-tests-resources-stack.yml` and parameter file `setup-synthetic-tests-resources-stack-parameters.json`. See this [article](https://aws.amazon.com/blogs/devops/passing-parameters-to-cloudformation-stacks-with-the-aws-cli-and-powershell/) for the details on how to pass parameters file using CLI.
+
     ```
     aws cloudformation create-stack --stack-name  SetupSyntheticTestsDemoResourcesStack --template-body file://<The path to local workspace>/aws-codepipeline-synthetic-tests/setup-synthetic-tests-resources-stack.yml  --capabilities  CAPABILITY_IAM --parameters  file://<The path to local workspace>/aws-codepipeline-synthetic-tests/setup-synthetic-tests-resources-stack-parameters.json
     ```
