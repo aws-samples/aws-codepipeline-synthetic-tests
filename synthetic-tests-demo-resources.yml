@@ -78,6 +78,7 @@ Resources:
                             - "s3:GetObject"
                         Resource:
                           - "Fn::Join": ["", ["arn:aws:s3:::", {"Ref": "ArtifactStoreBucket"}, "/*" ]]
+                          - "Fn::Join": ["", ["arn:aws:s3:::aws-codedeploy-", {"Ref": "AWS::Region"}, "/*" ]]
 
 
   EC2InstanceProfile:
@@ -117,12 +118,12 @@ Resources:
                     - [
                         "#!/bin/bash -xe\n",
 
-                        "yum -y update\n",
-                        "yum install -y ruby\n",
-                        "yum install -y aws-cli\n",
+                        "/usr/bin/yum -y update\n",
+                        "/usr/bin/yum install -y ruby\n",
+                        "/usr/bin/yum install -y aws-cli\n",
                         "cd /home/ec2-user/\n",
-                        "aws s3 cp s3://aws-codedeploy-", { "Ref" : "AWS::Region" }, "/latest/install . --region ", { "Ref" : "AWS::Region" }, "\n",
-                        "chmod +x ./install\n",
+                        "/usr/bin/aws s3 cp s3://aws-codedeploy-", { "Ref" : "AWS::Region" }, "/latest/install . --region ", { "Ref" : "AWS::Region" }, "\n",
+                        "/bin/chmod +x ./install\n",
                         "./install auto\n"
                       ]
 
